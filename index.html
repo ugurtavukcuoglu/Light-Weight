@@ -98,7 +98,7 @@ html, body {
 
 .fab {
   position: fixed;
-  bottom: calc(var(--safe-bottom) + 24px);
+  bottom: calc(var(--safe-bottom) + 80px);
   right: 20px;
   width: 56px; height: 56px;
   background: var(--accent);
@@ -120,8 +120,9 @@ html, body {
 }
 .ex-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 16px;
+  padding: 14px 16px 14px 6px;
   cursor: pointer;
+  gap: 4px;
 }
 .ex-header:active { background: var(--surface2); }
 .ex-name-text { font-weight: 500; font-size: 0.93rem; }
@@ -371,6 +372,19 @@ html, body {
 .add-ex-btn:active { background: var(--surface2); }
 
 .swipe-hint { font-size: 0.7rem; color: var(--muted2); text-align: center; padding: 8px; }
+
+/* ── DRAG HANDLE ── */
+.drag-handle {
+  width: 32px; height: 44px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted2);
+  font-size: 1rem;
+  cursor: grab;
+  flex-shrink: 0;
+  touch-action: none;
+}
+.ex-row.dragging { opacity: 0.35; }
+.ex-row.drag-over { border-color: var(--accent); }
 
 .del-split-btn {
   width: 28px; height: 28px;
@@ -881,6 +895,102 @@ document.querySelectorAll('.modal-overlay').forEach(o => {
 // enter to save in inputs
 document.getElementById('split-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveSplit(); });
 document.getElementById('ex-name-input').addEventListener('keydown', e => { if (e.key === 'Enter') saveExercise(); });
+
+// ── DRAG TO REORDER ──
+let dragState = null;
+
+function dragStart(e, exId) {
+  e.stopPropagation();
+  const el = document.getElementById('exrow-' + exId);
+  if (!el) return;
+
+  const isTouch = e.type === 'touchstart';
+  const startY = isTouch ? e.touches[0].clientY : e.clientY;
+  const rect = el.getBoundingClientRect();
+  const offsetY = startY - rect.top;
+
+  // create ghost
+  const ghost = el.cloneNode(true);
+  ghost.id = 'drag-ghost';
+  ghost.style.cssText = `
+    position:fixed; left:${rect.left}px; top:${rect.top}px;
+    width:${rect.width}px; opacity:0.9; z-index:999;
+    pointer-events:none; border-radius:12px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.5);
+    background:var(--surface2);
+    transition: none;
+  `;
+  document.body.appendChild(ghost);
+  el.classList.add('dragging');
+
+  dragState = { exId, ghost, offsetY, currentOver: null };
+
+  const onMove = (ev) => {
+    const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+    ghost.style.top = (clientY - offsetY) + 'px';
+
+    // find which row we're over
+    const split = state.splits.find(s => s.id === state.currentSplitId);
+    let overExId = null;
+    split.exercises.forEach(ex => {
+      const row = document.getElementById('exrow-' + ex.id);
+      if (!row || ex.id === exId) return;
+      const r = row.getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) overExId = ex.id;
+    });
+
+    // update highlight
+    if (dragState.currentOver !== overExId) {
+      if (dragState.currentOver) document.getElementById('exrow-' + dragState.currentOver)?.classList.remove('drag-over');
+      if (overExId) document.getElementById('exrow-' + overExId)?.classList.add('drag-over');
+      dragState.currentOver = overExId;
+    }
+    ev.preventDefault();
+  };
+
+  const onEnd = () => {
+    ghost.remove();
+    const draggingEl = document.getElementById('exrow-' + exId);
+    if (draggingEl) draggingEl.classList.remove('dragging');
+    if (dragState.currentOver) {
+      document.getElementById('exrow-' + dragState.currentOver)?.classList.remove('drag-over');
+      // reorder in state
+      const split = state.splits.find(s => s.id === state.currentSplitId);
+      const fromIdx = split.exercises.findIndex(e => e.id === exId);
+      const toIdx = split.exercises.findIndex(e => e.id === dragState.currentOver);
+      if (fromIdx !== -1 && toIdx !== -1) {
+        const [moved] = split.exercises.splice(fromIdx, 1);
+        split.exercises.splice(toIdx, 0, moved);
+        save();
+        // preserve open states
+        const openIds = new Set();
+        split.exercises.forEach(ex => {
+          if (document.getElementById('sets-' + ex.id)?.classList.contains('open')) openIds.add(ex.id);
+        });
+        renderExercises();
+        requestAnimationFrame(() => {
+          openIds.forEach(id => {
+            document.getElementById('sets-' + id)?.classList.add('open');
+            document.getElementById('arrow-' + id)?.classList.add('open');
+          });
+        });
+      }
+    }
+    dragState = null;
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onEnd);
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onEnd);
+  };
+
+  if (isTouch) {
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd);
+  } else {
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+  }
+}
 
 // ── INIT ──
 load();
